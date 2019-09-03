@@ -36,8 +36,8 @@ def test_conv2dchannelscale():
 
 
 def test_dynamicunetwide():
-    orig_shape = DynamicUnetWide.dummy_image_size
-    dummy_input = DynamicUnetWide.dummy_input
+    orig_shape = (3, 256, 256)
+    dummy_input = Input(*orig_shape)
     encoder = resnet34()
     x = DynamicUnetWide(encoder, channels_factor=1)(dummy_input)
     assert orig_shape == utils.get_input_shape(x)

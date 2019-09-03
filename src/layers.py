@@ -1,4 +1,4 @@
-simport numpy as np
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -208,14 +208,11 @@ class Conv2DScaleChannels(Layer):
 
 
 # TODO: Spectral norm type
-class DynamicUnetWide(SLModel):
+class DynamicUnetWide(Layer):
     """Create a U-Net from a given architecture."""
 
-    # We'll use this for probing the model for output sizes
     # Assume the input channels is 3
-    dummy_image_size = (3, 256, 256)
-    dummy_input = Input(*dummy_image_size)
-    input_channels = dummy_image_size[0]
+    input_channels = 3
     net_base_channels = 256
 
     def __init__(self, encoder, channels_factor=1):
@@ -266,8 +263,6 @@ class DynamicUnetWide(SLModel):
             self.input_channels, kernel_size=1, activation="linear"
         )
 
-        self.infer_inputs(self.dummy_input)
-
     def forward(self, x):
         # Encoder
         x, residuals = self.encoder(x)
@@ -286,7 +281,5 @@ class DynamicUnetWide(SLModel):
         x = self.upsampler(x)
         x = self.merge([x, residuals[0]])
         x = self.res_block(x)
-        self.loss_in = self.final_conv(x)
-
-        return torch.sigmoid(self.loss_in)
+        return self.final_conv(x)
 
