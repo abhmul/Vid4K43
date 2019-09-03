@@ -15,7 +15,6 @@ from pyjet.layers import (
 )
 import pyjet.layers.layer_utils as utils
 from pyjet.models import SLModel
-from pyjet.hooks import hook_outputs, model_sizes
 import pyjet.backend as J
 
 assert J.channels_mode == "channels_first", "Must use J.channels_mode='channels_first'"
@@ -275,7 +274,6 @@ class DynamicUnetWide(Layer):
             reversed(residuals[1:]), self.unet_layers
         ):
             residual_input = residual_input
-            print(residual_input.size())  # For debugging
             x = unet_layer(x, residual_input)
         # last cross
         x = self.upsampler(x)
