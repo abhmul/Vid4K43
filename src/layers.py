@@ -1,4 +1,4 @@
-import numpy as np
+simport numpy as np
 
 import torch
 import torch.nn as nn
@@ -38,14 +38,14 @@ def icnr(x, scale=2, init=nn.init.kaiming_normal_):
 class PixelShuffle_ICNR(Layer):
     "Upsample by `scale` from input filters to output filters, using `nn.PixelShuffle`, `icnr` init, and `weight_norm`."
 
-    def __init__(self, output_filters: int, scale: int = 2, input_shape=None):
+    def __init__(self, output_filters=None, scale=2, input_shape=None):
         super().__init__()
         self.input_shape = input_shape
         self.output_filters = output_filters
         self.scale = scale
 
-        self.conv = Conv2D(
-            output_filters * (scale ** 2), kernel_size=1, input_shape=self.input_shape
+        self.conv = lambda filters: Conv2D(
+            filters * (scale ** 2), kernel_size=1, input_shape=self.input_shape
         )
         self.shuf = nn.PixelShuffle(scale)
         # Blurring over (h*w) kernel
@@ -60,6 +60,9 @@ class PixelShuffle_ICNR(Layer):
 
     def __build_layer(self, inputs):
         # Calling it once builds the layer
+        if self.output_filters is None:
+            self.output_filters = utils.get_channels(inputs)
+        self.conv = self.conv(self.output_filters)
         x = self.conv(inputs)
         icnr(self.conv.weight())
 
@@ -138,7 +141,7 @@ class UnetBlockWide(Layer):
         self.att = SelfAttention() if self.self_attention else Identity
         self.merge = Concatenate(dim=0)
 
-    def forward(self, residual_input, upsample_input):
+    def forward(self, upsample_input, residual_input):
         upsample_output = self.upsampler(upsample_input)
         x_img_shape = utils.get_shape_no_channels(residual_input)
         upsample_img_shape = utils.get_shape_no_channels(upsample_output)
@@ -186,99 +189,102 @@ class SelfAttention(Layer):
         return o.view(*size).contiguous()
 
 
+class Conv2DScaleChannels(Layer):
+    def __init__(self, scale=1, **conv_kwargs):
+        super().__init__()
+        self.scale = scale
+        self.conv = lambda input_channels: Conv2D(
+            input_channels * self.scale, **conv_kwargs
+        )
+
+        self.register_builder(self.__build_layer)
+
+    def __build_layer(self, inputs):
+        input_channels = utils.get_channels(inputs)
+        self.conv = self.conv(input_channels)
+
+    def forward(self, inputs):
+        return self.conv(inputs)
+
+
 # TODO: Spectral norm type
 class DynamicUnetWide(SLModel):
     """Create a U-Net from a given architecture."""
 
-    def __init__(self, encoder, channels_factor=1, input_channels=3):
+    # We'll use this for probing the model for output sizes
+    # Assume the input channels is 3
+    dummy_image_size = (3, 256, 256)
+    dummy_input = Input(*dummy_image_size)
+    input_channels = dummy_image_size[0]
+    net_base_channels = 256
+
+    def __init__(self, encoder, channels_factor=1):
+        """`encoder` must be a resnet"""
         super().__init__()
-        channels = 256 * channels_factor
-        # We'll use this for probing the model for output sizes
-        dummy_image_size = (input_channels, 256, 256)
-        dummy_input = Input(dummy_image_size)
-        encoder.eval()  # Make this eval while we're probing it
-        # Hook the outputs for skip connections we want
-        self.skip_idxs, self.skip_sizes = self.get_skip_idxs_sizes(encoder, dummy_input)
-        self.skip_outputs = hook_outputs(
-            [encoder[i] for i in self.skip_idxs], detach=False
-        )
-        # Run a dummy input through the encoder to get the output channel size.
-        encoder_out = encoder(dummy_input).detach()
-        encoder_out_channels = utils.get_channels(encoder_out)
-        encoder.train()
+        # First check if we need to cast the encoder to cuda
+        if J.use_cuda:
+            encoder = encoder.cuda()
+
+        self.channels_factor = channels_factor
+        self.channels = self.net_base_channels * self.channels_factor
 
         # Define the network
         self.encoder = encoder
         self.encoder_batchnorm = BatchNorm2D()
         self.encoder_activation = nn.ReLU()
-        self.bottleneck = nn.Sequential(
-            Conv2D(
-                encoder_out_channels * 2,
-                kernel_size=3,
-                activation="relu",
-                batchnorm=True,
+        self.neck = nn.Sequential(
+            Conv2DScaleChannels(
+                scale=2, kernel_size=3, activation="relu", batchnorm=True
             ),
-            Conv2D(
-                encoder_out_channels, kernel_size=3, activation="relu", batchnorm=True
+            Conv2DScaleChannels(
+                scale=1, kernel_size=3, activation="relu", batchnorm=True
             ),
         )
 
         self.unet_layers = []
-        # We'll use a little different logic for the last one
-        for _ in self.skip_idxs[:-1]:
+        # We'll use a little different logic for the last 2 ones
+        assert self.encoder.num_residuals >= 2  # This includes the input
+        for _ in range(self.encoder.num_residuals - 2):
             # In his code he only uses self attention on the 3rd to last layer
             # We'll try it everywhere and come back and fix if it's not working
-            unet_block = UnetBlockWide(channels, self_attention=True)
+            unet_block = UnetBlockWide(self.channels, self_attention=True)
             self.unet_layers.append(unet_block)
-        # And the final one
-        unet_block = UnetBlockWide(channels // 2, self_attention=False)
+
+        # And the penultimate one
+        unet_block = UnetBlockWide(self.channels // 2, self_attention=False)
         self.unet_layers.append(unet_block)
         self.unet_layers = nn.ModuleList(self.unet_layers)
 
-        # If our image does not match up we need to do some resizing
-        if dummy_image_size[1:] != self.skip_sizes[-1][1:]:
-            print(
-                f"Image size {dummy_image_size} does not match current output size {self.skip_sizes[-1]}"
-            )
-            # If this happens we need to do a PixelShuffle
-            raise ValueError
-
-        # The last cross gets the original input and merges with the current output
+        # And the final one
+        self.upsampler = PixelShuffle_ICNR(scale=2)
         self.merge = Concatenate(dim=0)
         self.res_block = ResidualBlock(
             kernel_size=3, activation="relu", batchnorm=True, dense=False
         )
-
         # Final Conv layer
-        self.final_conv = Conv2D(input_channels, kernel_size=1, activation="linear")
+        self.final_conv = Conv2D(
+            self.input_channels, kernel_size=1, activation="linear"
+        )
 
-        self.infer_inputs(dummy_input)
-
-    def get_skip_idxs_sizes(self, encoder, dummy_input):
-        "Get the indexes of the layers where the size of the activation changes."
-        encoder_sizes = model_sizes(encoder, dummy_input)
-        # We're using "channels_first"
-        skip_channels = np.array([size[0] for size in encoder_sizes])
-        skip_idxs = list(reversed(np.where(skip_channels[:-1] != skip_channels[1:])[0]))
-        skip_sizes = [encoder_sizes[i] for i in skip_idxs]
-        print(f"Skip sizes are {skip_sizes}")
-        return skip_idxs, skip_sizes
+        self.infer_inputs(self.dummy_input)
 
     def forward(self, x):
-        orig = x
         # Encoder
-        x = self.encoder(x)
+        x, residuals = self.encoder(x)
         x = self.encoder_batchnorm(x)
         x = self.encoder_activation(x)
         # Neck
-        x = self.bottleneck(x)
-        # Unets
-        for residual_input, unet_layer in zip(self.skip_outputs, self.unet_layers):
-            residual_input = residual_input.stored[0]  # There should only be one item
+        x = self.neck(x)
+        # Unets - save the last residual for the last cross
+        for residual_input, unet_layer in zip(
+            reversed(residuals[1:]), self.unet_layers
+        ):
+            residual_input = residual_input
             print(residual_input.size())  # For debugging
-            x = unet_layer(residual_input, x)
+            x = unet_layer(x, residual_input)
         # last cross
-        x = self.merge([x, orig])
+        x = self.upsampler(x)
+        x = self.merge([x, residuals[0]])
         x = self.res_block(x)
         self.loss_in = self.final_conv(x)
 

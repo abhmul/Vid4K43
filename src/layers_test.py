@@ -1,5 +1,6 @@
 from pyjet.layers import layer_utils as utils
 
+from resnet import *
 from layers import *
 import pytest
 
@@ -17,12 +18,27 @@ def test_residualblock():
 
 
 def test_unetblockwide():
-    x = UnetBlockWide(10)(Input(3, 40, 50), (Input(3, 20, 25)))
+    x = UnetBlockWide(10)(Input(3, 20, 25), Input(3, 40, 50))
     assert utils.get_input_shape(x) == (10, 40, 50)
 
 
 def test_selfattention():
-    orig_shape = (3, 40, 50)
+    # The input channels must be greater than 8
+    orig_shape = (8, 40, 50)
     x = SelfAttention()(Input(*orig_shape))
     assert utils.get_input_shape(x) == orig_shape
+
+
+def test_conv2dchannelscale():
+    orig_shape = (8, 40, 50)
+    x = Conv2DScaleChannels(2, kernel_size=3)(Input(*orig_shape))
+    assert orig_shape[0] * 2 == utils.get_channels(x)
+
+
+def test_dynamicunetwide():
+    orig_shape = DynamicUnetWide.dummy_image_size
+    dummy_input = DynamicUnetWide.dummy_input
+    encoder = resnet34()
+    x = DynamicUnetWide(encoder, channels_factor=1)(dummy_input)
+    assert orig_shape == utils.get_input_shape(x)
 
