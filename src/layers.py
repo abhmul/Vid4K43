@@ -152,6 +152,55 @@ class UnetBlockWide(Layer):
         return self.att(self.conv(cat_x))
 
 
+class Self_Attn(nn.Module):
+    """ Self attention Layer"""
+
+    def __init__(self, in_dim, activation):
+        super(Self_Attn, self).__init__()
+        self.chanel_in = in_dim
+        self.activation = activation
+
+        self.query_conv = nn.Conv2d(
+            in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1
+        )
+        self.key_conv = nn.Conv2d(
+            in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1
+        )
+        self.value_conv = nn.Conv2d(
+            in_channels=in_dim, out_channels=in_dim, kernel_size=1
+        )
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+        self.softmax = nn.Softmax(dim=-1)  #
+
+    def forward(self, x):
+        """
+            inputs :
+                x : input feature maps( B X C X W X H)
+            returns :
+                out : self attention value + input feature 
+                attention: B X N X N (N is Width*Height)
+        """
+        m_batchsize, C, width, height = x.size()
+        proj_query = (
+            self.query_conv(x).view(m_batchsize, -1, width * height).permute(0, 2, 1)
+        )  # B X CX(N)
+        proj_key = self.key_conv(x).view(
+            m_batchsize, -1, width * height
+        )  # B X C x (*W*H)
+        energy = torch.bmm(proj_query, proj_key)  # transpose check
+        attention = self.softmax(energy)  # BX (N) X (N)
+        proj_value = self.value_conv(x).view(
+            m_batchsize, -1, width * height
+        )  # B X C X N
+
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1))
+        out = out.view(m_batchsize, C, width, height)
+
+        out = self.gamma * out + x
+        return out, attention
+
+
 class SelfAttention(Layer):
     "Self attention layer for nd."
 
@@ -159,9 +208,13 @@ class SelfAttention(Layer):
         super().__init__()
         self.input_shape = input_shape
         # Save them as constructors and we'll build them in the builder
-        self.query = lambda input_channels: Conv1D(input_channels, input_channels // 8)
-        self.key = lambda input_channels: Conv1D(input_channels, input_channels // 8)
-        self.value = lambda input_channels: Conv1D(input_channels, input_channels)
+        self.f = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
+        self.g = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
+        self.h = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
+        # jantic left this out of his code, probably because a complete c x c layer
+        # would have been able to encode the v-h combo and more. But the way from
+        # the paper (include v and h) should be fewer parameters.
+        self.v = lambda input_channels: Conv2D(input_channels, kernel_size=1)
         self.gamma = nn.Parameter(J.tensor(0.0))
 
         # Registrations
@@ -171,23 +224,38 @@ class SelfAttention(Layer):
         # Calling it once builds the layer
         input_shape = utils.get_input_shape(inputs)
         input_channels = utils.get_channels(inputs)
-        self.query = self.query(input_channels)
-        self.key = self.key(input_channels)
-        self.value = self.value(input_channels)
+        self.f = self.f(input_channels)
+        self.g = self.g(input_channels)
+        self.h = self.h(input_channels)
+        self.v = self.v(input_channels)
+
+    def flatten_img(self, x):
+        shape = tuple(x.size())
+        return x.view(*shape[:2], -1), shape
+
+    def unflatten_img(self, x, shape):
+        return x.view(*shape)
 
     def forward(self, x):
         # Notation from https://arxiv.org/pdf/1805.08318.pdf
         # Flatten x along the length, width dimension
-        size = x.size()
-        x = x.view(*size[:2], -1)
-        # Compute the q, k, and v
-        q, k, v = self.query(x), self.key(x), self.value(x)
-        beta = F.softmax(torch.bmm(q.permute(0, 2, 1).contiguous(), k), dim=1)
+        # Compute the f, k, and v
+
+        f, g, h = self.f(x), self.g(x), self.h(x)
+        f, fshape = self.flatten_img(f)
+        g, gshape = self.flatten_img(g)
+        h, hshape = self.flatten_img(h)
+        beta = F.softmax(torch.bmm(f.transpose(1, 2), g), dim=1)
         # Combine with input and reshape
-        o = self.gamma * torch.bmm(v, beta) + x
-        return o.view(*size).contiguous()
+        inner = torch.bmm(h, beta)
+        target_shape = (inner.size(0), inner.size(1), hshape[2], hshape[3])
+        inner = self.unflatten_img(inner, target_shape)
+        o = self.v(inner)
+        y = self.gamma * o + x
+        return y
 
 
+# TODO: Move this to PyJet
 class Conv2DScaleChannels(Layer):
     def __init__(self, scale=1, **conv_kwargs):
         super().__init__()
