@@ -11,6 +11,7 @@ I'll use to handle the data. The RandomCropper implements a pyjet
 augmenter and crops the given images to 
 """
 
+
 class RandomCropper(aug.Augmenter):
     def __init__(self, crop_size, labels=False, augment_labels=False):
         super(RandomCropper, self).__init__(
@@ -49,9 +50,9 @@ class RandomCropper(aug.Augmenter):
             return npimg[
                 cropy : cropy + self.crop_height, cropx : cropx + self.crop_width
             ]
-        
+
         x = [crop_img(npimg) for npimg in x]
-        assert all(x[0].shape == x[i].shape for i in range(1, len(x))
+        assert all(x[0].shape == x[i].shape for i in range(1, len(x)))
         x = np.array(x)
         return x
 
@@ -102,13 +103,13 @@ class ImageNetNormalizer(DataTransformer):
         self.mean = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
         self.std = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
         self.eps = J.epsilon
-    
+
     def normalize_uint8(self, x):
         assert x.max() > 200
         x = np.clip(x, 0, 255)
-        x = x / 255.
+        x = x / 255.0
         return (x - self.mean) / (self.std + self.eps)
-    
+
     def transform(self, batch):
         x, y = batch
         # x is batched (B x 3 x H x W) and is uint8
@@ -117,15 +118,17 @@ class ImageNetNormalizer(DataTransformer):
         return x, y
 
 
+def bilinear(factor):
+    """A simple function to get a bilinear resizer with given factor"""
+    return lambda x: imresize(
+        imresize(x, factor, interp="bilinear"), 1 / factor, interp="bilinear"
+    )
+
+
 class CrappifyTransformer(DataTransformer):
     def __init__(self, crappifier=bilinear(0.5)):
         super(CrappifyTransformer, self).__init__(labels=False)
         self.crappifier = crappifier
-    
+
     def transform(self, x):
         return self.crappifier(x), x
-
-def bilinear(factor):
-    """A simple function to get a bilinear resizer with given factor"""
-    return lambda x: imresize(imresize(x, factor, interp='bilinear'), 1 / factor, interp='bilinear')
-

@@ -9,6 +9,6 @@ TRAINING_CONFIG = dict(
     batch_size=32,
     epoch_size=1000,
     epochs=10,
-    crop_size=(256, 256)
+    crop_size=(256, 256),
     seed=get_random_seed(),
 )
