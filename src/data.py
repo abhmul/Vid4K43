@@ -1,6 +1,8 @@
 import numpy as np
+import torchvision.transforms.functional as F
 import pyjet.data as data
 import pyjet.augmenters as aug
+import pyjet.backend as J
 import logging
 from scipy.misc import imresize
 
@@ -93,15 +95,37 @@ class TransformerGenerator(data.BatchGenerator):
         return self.transformer.transform(next(self.generator))
 
 
+# Goes after crappifier
+class ImageNetNormalizer(DataTransformer):
+    def __init__(self):
+        super().__init__(labels=True)
+        self.mean = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
+        self.std = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
+        self.eps = J.epsilon
+    
+    def normalize_uint8(self, x):
+        assert x.max() > 200
+        x = np.clip(x, 0, 255)
+        x = x / 255.
+        return (x - self.mean) / (self.std + self.eps)
+    
+    def transform(self, batch):
+        x, y = batch
+        # x is batched (B x 3 x H x W) and is uint8
+        x = self.normalize_uint8(x)
+        y = self.normalize_uint8(y)
+        return x, y
+
+
 class CrappifyTransformer(DataTransformer):
     def __init__(self, crappifier=bilinear(0.5)):
         super(CrappifyTransformer, self).__init__(labels=False)
         self.crappifier = crappifier
     
     def transform(self, x):
-        return self.crappifier(x)
+        return self.crappifier(x), x
 
 def bilinear(factor):
     """A simple function to get a bilinear resizer with given factor"""
-    return lambda x: imresize(x, factor, interp='bilinear')
+    return lambda x: imresize(imresize(x, factor, interp='bilinear'), 1 / factor, interp='bilinear')
 
