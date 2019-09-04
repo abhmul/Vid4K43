@@ -2,6 +2,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+from torch.nn.utils import spectral_norm
 import torch.nn.functional as F
 from pyjet.layers import (
     Layer,
@@ -37,14 +38,20 @@ def icnr(x, scale=2, init=nn.init.kaiming_normal_):
 class PixelShuffle_ICNR(Layer):
     "Upsample by `scale` from input filters to output filters, using `nn.PixelShuffle`, `icnr` init, and `weight_norm`."
 
-    def __init__(self, output_filters=None, scale=2, input_shape=None):
+    def __init__(
+        self, output_filters=None, scale=2, input_shape=None, spectral_norm=False
+    ):
         super().__init__()
         self.input_shape = input_shape
         self.output_filters = output_filters
         self.scale = scale
+        self.spectral_norm = spectral_norm
 
         self.conv = lambda filters: Conv2D(
-            filters * (scale ** 2), kernel_size=1, input_shape=self.input_shape
+            filters * (scale ** 2),
+            kernel_size=1,
+            input_shape=self.input_shape,
+            spectral_norm=self.spectral_norm,
         )
         self.shuf = nn.PixelShuffle(scale)
         # Blurring over (h*w) kernel
@@ -79,6 +86,7 @@ class ResidualBlock(Layer):
         batchnorm=False,
         dense=False,
         bottle=False,
+        spectral_norm=False,
     ):
         """There are some discrepancies between this implementation and Fastai's res_block, look here if issues"""
         super().__init__()
@@ -87,6 +95,7 @@ class ResidualBlock(Layer):
         self.batchnorm = batchnorm
         self.dense = dense
         self.bottle = bottle
+        self.spectral_norm = spectral_norm
         self.input_shape = input_shape
 
         self.conv1 = lambda input_filters: Conv2D(
@@ -94,12 +103,14 @@ class ResidualBlock(Layer):
             self.kernel_size,
             activation=self.activation,
             batchnorm=self.batchnorm,
+            spectral_norm=self.spectral_norm,
         )
         self.conv2 = lambda input_filters: Conv2D(
             input_filters,
             self.kernel_size,
             activation=self.activation,
             batchnorm=self.batchnorm,
+            spectral_norm=self.spectral_norm,
         )
         self.merge = Concatenate(dim=0) if dense else Add()
 
@@ -126,17 +137,24 @@ class UnetBlockWide(Layer):
         self_attention=False,
         input_shape=None,
         upsample_input_shape=None,
+        spectral_norm=False,
     ):
         super().__init__()
         self.output_filters = output_filters
         self.self_attention = self_attention
         self.input_shape = input_shape
         self.upsample_input_shape = upsample_input_shape
+        self.spectral_norm = spectral_norm
 
         self.upsample_output_filters = self.output_filters
         self.upsampler = PixelShuffle_ICNR(self.upsample_output_filters)
         self.bn = BatchNorm2D()
-        self.conv = Conv2D(self.output_filters, kernel_size=3, input_activation="relu")
+        self.conv = Conv2D(
+            self.output_filters,
+            kernel_size=3,
+            input_activation="relu",
+            spectral_norm=self.spectral_norm,
+        )
         self.att = SelfAttention() if self.self_attention else Identity
         self.merge = Concatenate(dim=0)
 
@@ -152,69 +170,29 @@ class UnetBlockWide(Layer):
         return self.att(self.conv(cat_x))
 
 
-class Self_Attn(nn.Module):
-    """ Self attention Layer"""
-
-    def __init__(self, in_dim, activation):
-        super(Self_Attn, self).__init__()
-        self.chanel_in = in_dim
-        self.activation = activation
-
-        self.query_conv = nn.Conv2d(
-            in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1
-        )
-        self.key_conv = nn.Conv2d(
-            in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1
-        )
-        self.value_conv = nn.Conv2d(
-            in_channels=in_dim, out_channels=in_dim, kernel_size=1
-        )
-        self.gamma = nn.Parameter(torch.zeros(1))
-
-        self.softmax = nn.Softmax(dim=-1)  #
-
-    def forward(self, x):
-        """
-            inputs :
-                x : input feature maps( B X C X W X H)
-            returns :
-                out : self attention value + input feature 
-                attention: B X N X N (N is Width*Height)
-        """
-        m_batchsize, C, width, height = x.size()
-        proj_query = (
-            self.query_conv(x).view(m_batchsize, -1, width * height).permute(0, 2, 1)
-        )  # B X CX(N)
-        proj_key = self.key_conv(x).view(
-            m_batchsize, -1, width * height
-        )  # B X C x (*W*H)
-        energy = torch.bmm(proj_query, proj_key)  # transpose check
-        attention = self.softmax(energy)  # BX (N) X (N)
-        proj_value = self.value_conv(x).view(
-            m_batchsize, -1, width * height
-        )  # B X C X N
-
-        out = torch.bmm(proj_value, attention.permute(0, 2, 1))
-        out = out.view(m_batchsize, C, width, height)
-
-        out = self.gamma * out + x
-        return out, attention
-
-
 class SelfAttention(Layer):
     "Self attention layer for nd."
 
-    def __init__(self, input_shape=None):
+    def __init__(self, input_shape=None, spectral_norm=False):
         super().__init__()
         self.input_shape = input_shape
+        self.spectral_norm = spectral_norm
         # Save them as constructors and we'll build them in the builder
-        self.f = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
-        self.g = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
-        self.h = lambda input_channels: Conv2D(input_channels // 8, kernel_size=1)
+        self.f = lambda input_channels: Conv2D(
+            input_channels // 8, kernel_size=1, spectral_norm=self.spectral_norm
+        )
+        self.g = lambda input_channels: Conv2D(
+            input_channels // 8, kernel_size=1, spectral_norm=self.spectral_norm
+        )
+        self.h = lambda input_channels: Conv2D(
+            input_channels // 8, kernel_size=1, spectral_norm=self.spectral_norm
+        )
         # jantic left this out of his code, probably because a complete c x c layer
         # would have been able to encode the v-h combo and more. But the way from
         # the paper (include v and h) should be fewer parameters.
-        self.v = lambda input_channels: Conv2D(input_channels, kernel_size=1)
+        self.v = lambda input_channels: Conv2D(
+            input_channels, kernel_size=1, spectral_norm=self.spectral_norm
+        )
         self.gamma = nn.Parameter(J.tensor(0.0))
 
         # Registrations
@@ -282,7 +260,9 @@ class DynamicUnetWide(Layer):
     input_channels = 3
     net_base_channels = 256
 
-    def __init__(self, encoder, channels_factor=1):
+    def __init__(
+        self, encoder, channels_factor=1, batchnorm=False, spectral_norm=False
+    ):
         """`encoder` must be a resnet"""
         super().__init__()
         # First check if we need to cast the encoder to cuda
@@ -291,17 +271,25 @@ class DynamicUnetWide(Layer):
 
         self.channels_factor = channels_factor
         self.channels = self.net_base_channels * self.channels_factor
+        self.batchnorm = batchnorm
+        self.spectral_norm = spectral_norm
 
         # Define the network
         self.encoder = encoder
-        self.encoder_batchnorm = BatchNorm2D()
-        self.encoder_activation = nn.ReLU()
         self.neck = nn.Sequential(
             Conv2DScaleChannels(
-                scale=2, kernel_size=3, activation="relu", batchnorm=True
+                scale=2,
+                kernel_size=3,
+                activation="relu",
+                batchnorm=self.batchnorm,
+                spectral_norm=self.spectral_norm,
             ),
             Conv2DScaleChannels(
-                scale=1, kernel_size=3, activation="relu", batchnorm=True
+                scale=1,
+                kernel_size=3,
+                activation="relu",
+                batchnorm=self.batchnorm,
+                spectral_norm=self.spectral_norm,
             ),
         )
 
@@ -311,19 +299,27 @@ class DynamicUnetWide(Layer):
         for _ in range(self.encoder.num_residuals - 2):
             # In his code he only uses self attention on the 3rd to last layer
             # We'll try it everywhere and come back and fix if it's not working
-            unet_block = UnetBlockWide(self.channels, self_attention=True)
+            unet_block = UnetBlockWide(
+                self.channels, self_attention=True, spectral_norm=self.spectral_norm
+            )
             self.unet_layers.append(unet_block)
 
         # And the penultimate one
-        unet_block = UnetBlockWide(self.channels // 2, self_attention=False)
+        unet_block = UnetBlockWide(
+            self.channels // 2, self_attention=False, spectral_norm=self.spectral_norm
+        )
         self.unet_layers.append(unet_block)
         self.unet_layers = nn.ModuleList(self.unet_layers)
 
         # And the final one
-        self.upsampler = PixelShuffle_ICNR(scale=2)
+        self.upsampler = PixelShuffle_ICNR(scale=2, spectral_norm=self.spectral_norm)
         self.merge = Concatenate(dim=0)
         self.res_block = ResidualBlock(
-            kernel_size=3, activation="relu", batchnorm=True, dense=False
+            kernel_size=3,
+            activation="relu",
+            batchnorm=self.batchnorm,
+            dense=False,
+            spectral_norm=self.spectral_norm,
         )
         # Final Conv layer
         self.final_conv = Conv2D(
@@ -333,8 +329,6 @@ class DynamicUnetWide(Layer):
     def forward(self, x):
         # Encoder
         x, residuals = self.encoder(x)
-        x = self.encoder_batchnorm(x)
-        x = self.encoder_activation(x)
         # Neck
         x = self.neck(x)
         # Unets - save the last residual for the last cross
