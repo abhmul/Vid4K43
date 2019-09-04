@@ -1,5 +1,3 @@
-from kaggleutils import get_random_seed
-
 TRAINING_CONFIG = dict(
     encoder="resnet18",
     self_attention=True,
@@ -10,5 +8,5 @@ TRAINING_CONFIG = dict(
     epoch_size=1000,
     epochs=10,
     crop_size=(256, 256),
-    seed=get_random_seed(),
+    seed=259,
 )
