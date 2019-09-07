@@ -18,7 +18,6 @@ parser.add_argument("-d", "--data", help="Glob for image data.")
 set_random_seed(TC["seed"])
 
 
-# TODO: Optimizer TTUR
 # TODO: Set up data to be loaded channels first somewhere in the pipeline
 # TODO: Write tests for basic tests for loss, optimizer, data
 # TODO: Finish and test training script
@@ -26,8 +25,7 @@ set_random_seed(TC["seed"])
 
 def build_data_loader(dataset, batch_size, epoch_size, crop_size):
     # Rounds the epoch size up to the nearest batch
-    epoch_size = ((epoch_size + batch_size - 1) // batch_size) * batch_size
-    steps_per_epoch = epoch_size // batch_size
+    steps_per_epoch = (epoch_size + batch_size - 1) // batch_size
 
     datagen = dataset.flow(steps_per_epoch, batch_size, shuffle=True)
     datagen = RandomCropper(crop_size)(datagen)
@@ -41,19 +39,25 @@ def prepare_data(
     batch_size=TC["batch_size"],
     epoch_size=TC["epoch_size"],
     crop_size=TC["crop_size"],
+    train_test_split=0.1,
 ):
     img_paths = np.array(glob(data_glob))
-    dataset = ImageDataset(img_paths)
+    dataset = ImageDataset(img_paths, to_float=False)
     train_dataset, test_dataset = dataset.validation_split(
-        split=0.1, shuffle=True, seed=get_random_seed()
+        split=train_test_split, shuffle=True, seed=get_random_seed()
     )
     train_dataset, val_dataset = train_dataset.validation_split(
-        split=0.1, shuffle=True, seed=get_random_seed()
+        split=train_test_split, shuffle=True, seed=get_random_seed()
     )
 
     # Construct the loader
     train_datagen = build_data_loader(train_dataset, batch_size, epoch_size, crop_size)
-    val_datagen = build_data_loader(val_dataset, batch_size, epoch_size, crop_size))
-    test_datagen = build_data_loader(test_dataset, batch_size, epoch_size, crop_size))
+    val_datagen = build_data_loader(
+        val_dataset, batch_size, epoch_size * train_test_split, crop_size
+    )
+    test_datagen = build_data_loader(
+        test_dataset, batch_size, epoch_size * train_test_split, crop_size
+    )
 
     return train_datagen, val_datagen, test_datagen
+

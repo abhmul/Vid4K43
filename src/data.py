@@ -21,11 +21,11 @@ class RandomCropper(aug.Augmenter):
 
     @property
     def crop_width(self):
-        self.crop_size[1]
+        return self.crop_size[1]
 
     @property
     def crop_height(self):
-        self.crop_size[0]
+        return self.crop_size[0]
 
     def augment(self, x):
         """The input comes in as an np array of
@@ -52,7 +52,9 @@ class RandomCropper(aug.Augmenter):
             ]
 
         x = [crop_img(npimg) for npimg in x]
-        assert all(x[0].shape == x[i].shape for i in range(1, len(x)))
+        assert all(
+            x[0].shape == x[i].shape for i in range(1, len(x))
+        ), f"Shapes do not match {[xi.shape for xi in x]}"
         x = np.array(x)
         return x
 
@@ -98,17 +100,25 @@ class TransformerGenerator(data.BatchGenerator):
 
 # Goes after crappifier
 class ImageNetNormalizer(DataTransformer):
+
+    mean = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
+    std = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
+    eps = J.epsilon
+
     def __init__(self):
         super().__init__(labels=True)
-        self.mean = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
-        self.std = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
-        self.eps = J.epsilon
 
-    def normalize_uint8(self, x):
-        assert x.max() > 200
+    @classmethod
+    def normalize_uint8(cls, x):
+        assert (
+            x.dtype == "uint8"
+        ), f"Numpy array is of type {x.dtype} when it should be uint8"
+        x = x.transpose(
+            0, 3, 1, 2
+        )  # Transpose the channels dim to make it channels_first
         x = np.clip(x, 0, 255)
         x = x / 255.0
-        return (x - self.mean) / (self.std + self.eps)
+        return (x - cls.mean) / (cls.std + cls.eps)
 
     def transform(self, batch):
         x, y = batch
@@ -117,12 +127,33 @@ class ImageNetNormalizer(DataTransformer):
         y = self.normalize_uint8(y)
         return x, y
 
+    @classmethod
+    def unnormalize_float(cls, x):
+        assert x.dtype == "float"
+        x = x * (cls.std + cls.eps) + cls.mean
+        x = np.clip(x * 255, 0, 255)
+        x = x.astype(np.uint8)
+        return x
+
 
 def bilinear(factor):
     """A simple function to get a bilinear resizer with given factor"""
-    return lambda x: imresize(
-        imresize(x, factor, interp="bilinear"), 1 / factor, interp="bilinear"
-    )
+
+    def resize(x):
+        x_out = np.stack(
+            [
+                imresize(
+                    imresize(xi, factor, interp="bilinear"),
+                    1 / factor,
+                    interp="bilinear",
+                )
+                for xi in x
+            ],
+            axis=0,
+        )
+        return x_out
+
+    return resize
 
 
 class CrappifyTransformer(DataTransformer):
