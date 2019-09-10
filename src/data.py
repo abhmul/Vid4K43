@@ -98,44 +98,6 @@ class TransformerGenerator(data.BatchGenerator):
         return self.transformer.transform(next(self.generator))
 
 
-# Goes after crappifier
-class ImageNetNormalizer(DataTransformer):
-
-    mean = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
-    std = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
-    eps = J.epsilon
-
-    def __init__(self):
-        super().__init__(labels=True)
-
-    @classmethod
-    def normalize_uint8(cls, x):
-        assert (
-            x.dtype == "uint8"
-        ), f"Numpy array is of type {x.dtype} when it should be uint8"
-        x = x.transpose(
-            0, 3, 1, 2
-        )  # Transpose the channels dim to make it channels_first
-        x = np.clip(x, 0, 255)
-        x = x / 255.0
-        return (x - cls.mean) / (cls.std + cls.eps)
-
-    def transform(self, batch):
-        x, y = batch
-        # x is batched (B x 3 x H x W) and is uint8
-        x = self.normalize_uint8(x)
-        y = self.normalize_uint8(y)
-        return x, y
-
-    @classmethod
-    def unnormalize_float(cls, x):
-        assert x.dtype == "float"
-        x = x * (cls.std + cls.eps) + cls.mean
-        x = np.clip(x * 255, 0, 255)
-        x = x.astype(np.uint8)
-        return x
-
-
 def bilinear(factor):
     """A simple function to get a bilinear resizer with given factor"""
 
@@ -163,3 +125,12 @@ class CrappifyTransformer(DataTransformer):
 
     def transform(self, x):
         return self.crappifier(x), x
+
+
+class ChannelsFirstTransformer(DataTransformer):
+    def __init__(self):
+        super(ChannelsFirstTransformer, self).__init__(labels=True)
+
+    def transform(self, batch):
+        x, y = batch
+        return x.transpose(0, 3, 1, 2), y.transpose(0, 3, 1, 2)

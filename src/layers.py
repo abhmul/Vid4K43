@@ -252,7 +252,6 @@ class Conv2DScaleChannels(Layer):
         return self.conv(inputs)
 
 
-# TODO: Spectral norm type
 class DynamicUnetWide(Layer):
     """Create a U-Net from a given architecture."""
 
@@ -296,11 +295,13 @@ class DynamicUnetWide(Layer):
         self.unet_layers = []
         # We'll use a little different logic for the last 2 ones
         assert self.encoder.num_residuals >= 2  # This includes the input
-        for _ in range(self.encoder.num_residuals - 2):
-            # In his code he only uses self attention on the 3rd to last layer
-            # We'll try it everywhere and come back and fix if it's not working
+        for i in range(self.encoder.num_residuals - 2):
+            # We use self attention on the 3rd to last block (like in SAGAN paper)
+            self_attention = i == self.encoder.num_residuals - 3
             unet_block = UnetBlockWide(
-                self.channels, self_attention=True, spectral_norm=self.spectral_norm
+                self.channels,
+                self_attention=self_attention,
+                spectral_norm=self.spectral_norm,
             )
             self.unet_layers.append(unet_block)
 

@@ -25,7 +25,7 @@ class FeatureLoss(nn.Module):
         self.layer_weights = layer_weights
 
         # Get the features and turn off their grad
-        self.features = models.vgg16_bn(True).features.eval()
+        self.features = models.vgg16_bn(pretrained=True).features.eval()
         if J.use_cuda:
             self.features = self.features.cuda()
         requires_grad(self.features, False)
@@ -44,6 +44,7 @@ class FeatureLoss(nn.Module):
         self.base_loss = F.l1_loss
 
         self.pixel, self.feat1, self.feat2, self.feat3 = [None] * 4
+        self.auxilaries = ["pixel", "feat1", "feat2", "feat3"]
 
     def _make_features(self, x):
         self.features(x)
