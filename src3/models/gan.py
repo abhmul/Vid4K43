@@ -1,5 +1,5 @@
 import torch.nn as nn
-from loss import feature_loss
+from loss import feature_loss, accuracy_with_logits
 
 from abstract_model import Model
 
@@ -9,7 +9,7 @@ class GANModel(Model):
         self,
         generator,
         critic,
-        generator_loss=feature_loss,
+        generator_loss=lambda x, y: feature_loss(x, y)["loss"],
         critic_loss=nn.BCEWithLogitsLoss(),
         loss_weights=(1.0, 1.0),
         generator_threshold=float("inf"),
@@ -80,6 +80,14 @@ class GANModel(Model):
             + self.critic_loss(crit_fake_pred, zeros)
         ) / 2
 
+    def _acc_c(self, crit_real_pred, crit_fake_pred):
+        ones = torch.ones_like(crit_real_pred)
+        zeros = torch.zeros_like(crit_fake_pred)
+        return (
+            accuracy_with_logits(crit_real_pred, ones)
+            + accuracy_with_logits(crit_fake_pred, zeros)
+        ) / 2
+
     def train(self):
         # Override the train to only set the model we care about in train mode
         self.current.train()
@@ -114,8 +122,9 @@ class GANModel(Model):
                 gen_x = self.generator(crap_x)
             crit_fake_pred = self.critic(gen_x)
             crit_loss = self._loss_c(crit_real_pred, crit_fake_pred)
+            crit_acc = self._acc_c(crit_real_pred, crit_fake_pred)
             self.last_loss = crit_loss  # Use this to figure out when to switch
-            return {"loss": crit_loss, "crit_loss": crit_loss}
+            return {"loss": crit_loss, "crit_loss": crit_loss, "crit_acc": crit_acc}
 
         raise ValueError(f"Unknown mode {self.mode}")
 
@@ -134,10 +143,12 @@ class GANModel(Model):
 
         gen_loss = self._loss_g(crit_fake_pred, gen_x, good_x)
         crit_loss = self._loss_c(crit_real_pred, crit_fake_pred)
+        crit_acc = self._acc_c(crit_real_pred, crit_fake_pred)
         return {
-            "loss": gen_loss + crit_loss,
-            "gen_loss": gen_loss,
-            "crit_loss": crit_loss,
+            "val_loss": gen_loss + crit_loss,
+            "val_gen_loss": gen_loss,
+            "val_crit_loss": crit_loss,
+            "val_crit_acc": crit_acc,
         }
 
     def predict_step(self, batch):

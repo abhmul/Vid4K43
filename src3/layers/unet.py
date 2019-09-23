@@ -113,4 +113,4 @@ class DynamicUnetWide(Layer):
         x = self.upsampler(x)
         x = self.merge([x, inputs, residuals[0]])
         x = self.res_block(x)
-        return self.final_conv(x)
+        return torch.sigmoid(self.final_conv(x))

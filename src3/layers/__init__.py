@@ -4,6 +4,7 @@ from .conv import *
 from .batchnorm import *
 from .upsample import *
 from .attention import *
+from .resnet import *
 from .blocks import *
 from .unet import *
-from .resnet import *
+from .critic import *
