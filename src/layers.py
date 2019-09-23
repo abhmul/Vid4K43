@@ -260,7 +260,12 @@ class DynamicUnetWide(Layer):
     net_base_channels = 256
 
     def __init__(
-        self, encoder, channels_factor=1, batchnorm=False, spectral_norm=False
+        self,
+        encoder,
+        channels_factor=1,
+        batchnorm=False,
+        spectral_norm=False,
+        input_batchnorm=False,
     ):
         """`encoder` must be a resnet"""
         super().__init__()
@@ -270,10 +275,12 @@ class DynamicUnetWide(Layer):
 
         self.channels_factor = channels_factor
         self.channels = self.net_base_channels * self.channels_factor
+        self.input_batchnorm = input_batchnorm
         self.batchnorm = batchnorm
         self.spectral_norm = spectral_norm
 
         # Define the network
+        self.batchnorm_in = BatchNorm2D() if self.input_batchnorm else lambda x: x
         self.encoder = encoder
         self.neck = nn.Sequential(
             Conv2DScaleChannels(
@@ -327,8 +334,21 @@ class DynamicUnetWide(Layer):
             self.input_channels, kernel_size=1, activation="linear"
         )
 
+    def trainable_params(self):
+        model_params = set(self.parameters())
+        encoder_params = set(self.encoder.parameters())
+        trainable = model_params - encoder_params
+        assert len(trainable) < len(model_params)
+        return trainable
+
     def forward(self, x):
+        inputs = x
+        # Input batchnorm if its activated
+        x = self.batchnorm_in(x)
         # Encoder
+        # with torch.no_grad():
+        #     x, residuals = self.encoder(x)
+        # residuals = [r.detach() for r in residuals]
         x, residuals = self.encoder(x)
         # Neck
         x = self.neck(x)
@@ -340,7 +360,8 @@ class DynamicUnetWide(Layer):
             x = unet_layer(x, residual_input)
         # last cross
         x = self.upsampler(x)
-        x = self.merge([x, residuals[0]])
+        # Not using the first residual on 4kification got loss ~1.48 Train, 1.39 Val
+        x = self.merge([x, inputs, residuals[0]])
         x = self.res_block(x)
         return self.final_conv(x)
 

@@ -20,7 +20,6 @@ def test_prepare_model():
         # Optimizer Params
         lr_range=(1e-7, 1e-3),
         momentum_range=(0.95, 0.85),
-        period=10,
     )
 
     print(repr(model))
@@ -34,13 +33,21 @@ def test_prepare_model():
 def test_prepare_data():
     batch_size = 32
     crop_size = (256, 256)
+    test_batch_size = 1
+    test_crop_size = (512, 512)
     tr, v, te = prepare_data(
-        DATA_GLOB, batch_size=batch_size, epoch_size=100, crop_size=crop_size
+        DATA_GLOB,
+        batch_size=batch_size,
+        epoch_size=100,
+        crop_size=crop_size,
+        test_batch_size=test_batch_size,
+        test_crop_size=test_crop_size,
+        test_split=0.1,
     )
 
     assert tr.steps_per_epoch == 4
     assert v.steps_per_epoch == 1
-    assert te.steps_per_epoch == 1
+    assert te.steps_per_epoch == 10
     for gen in (tr, v, te):
         batch_tr_x, batch_tr_y = next(gen)
         for batch_tr_imgs in (batch_tr_x, batch_tr_y):

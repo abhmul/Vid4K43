@@ -5,7 +5,6 @@ import torchvision.models as models
 from torchvision.models.vgg import cfgs as VGG_CONFIGS
 
 from pyjet.hooks import hook_outputs
-import pyjet.backend as J
 
 
 def requires_grad(module, grad):
@@ -26,8 +25,6 @@ class FeatureLoss(nn.Module):
 
         # Get the features and turn off their grad
         self.features = models.vgg16_bn(pretrained=True).features.eval()
-        if J.use_cuda:
-            self.features = self.features.cuda()
         requires_grad(self.features, False)
 
         # Get the layers we want
@@ -44,7 +41,6 @@ class FeatureLoss(nn.Module):
         self.base_loss = F.l1_loss
 
         self.pixel, self.feat1, self.feat2, self.feat3 = [None] * 4
-        self.auxilaries = ["feat1", "feat2", "feat3"]
 
     def _make_features(self, x):
         self.features(x)
@@ -59,5 +55,12 @@ class FeatureLoss(nn.Module):
         self.feat2 = self.base_loss(in_feat[1], out_feat[1]) * self.layer_weights[1]
         self.feat3 = self.base_loss(in_feat[2], out_feat[2]) * self.layer_weights[2]
 
-        return self.pixel
+        return self.pixel, self.feat1, self.feat2, self.feat3
 
+
+# Hack to not save weights in model state dict
+__feature_loss = FeatureLoss()
+
+
+def feature_loss(x, y):
+    return __feature_loss(x, y)

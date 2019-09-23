@@ -5,58 +5,12 @@ import pyjet.augmenters as aug
 import pyjet.backend as J
 import logging
 from scipy.misc import imresize
+from skimage.util import random_noise
 
 """This file contains the various data objects and manipulators
 I'll use to handle the data. The RandomCropper implements a pyjet
 augmenter and crops the given images to 
 """
-
-
-class RandomCropper(aug.Augmenter):
-    def __init__(self, crop_size, labels=False, augment_labels=False):
-        super(RandomCropper, self).__init__(
-            labels=labels, augment_labels=augment_labels
-        )
-        self.crop_size = crop_size
-
-    @property
-    def crop_width(self):
-        return self.crop_size[1]
-
-    @property
-    def crop_height(self):
-        return self.crop_size[0]
-
-    def augment(self, x):
-        """The input comes in as an np array of
-        np arrays that make up the individual images.
-        We randomly crop them to the specified size.
-        """
-
-        def crop_img(npimg):
-            h, w, _ = npimg.shape
-            # If the image is too small, we'll make it bigger
-            # This copies the entire image which might not be necessary
-            # If speed becomes and issue look here.
-            if h < self.crop_height or w < self.crop_width:
-                newimg_shape = (min(self.crop_height, h), min(self.crop_width, w))
-                new_npimg = np.zeros(newimg_shape + npimg.shape[2:])
-                new_npimg[[slice(i) for i in npimg.shape]] = npimg
-                npimg = new_npimg
-                h, w, _ = npimg.shape
-
-            cropy = np.random.randint(h - self.crop_height + 1)
-            cropx = np.random.randint(w - self.crop_width + 1)
-            return npimg[
-                cropy : cropy + self.crop_height, cropx : cropx + self.crop_width
-            ]
-
-        x = [crop_img(npimg) for npimg in x]
-        assert all(
-            x[0].shape == x[i].shape for i in range(1, len(x))
-        ), f"Shapes do not match {[xi.shape for xi in x]}"
-        x = np.array(x)
-        return x
 
 
 class DataTransformer(object):
@@ -98,39 +52,75 @@ class TransformerGenerator(data.BatchGenerator):
         return self.transformer.transform(next(self.generator))
 
 
-def bilinear(factor):
+def batch_apply(func, x):
+    x_out = np.stack([func(xi) for xi in x], axis=0)
+    return x_out
+
+
+def crappfier(factor, noise=True):
     """A simple function to get a bilinear resizer with given factor"""
 
-    def resize(x):
-        x_out = np.stack(
-            [
-                imresize(
-                    imresize(xi, factor, interp="bilinear"),
-                    1 / factor,
-                    interp="bilinear",
-                )
-                for xi in x
-            ],
-            axis=0,
+    # Do nothing if we're not crappifying
+    if factor == 1.0:
+        return lambda x: x
+
+    def crappify_img(npimg):
+        npimg = imresize(
+            imresize(npimg, factor, interp="bilinear"), 1 / factor, interp="bilinear"
         )
-        return x_out
+        if noise:
+            npimg = random_noise(npimg)
+        else:
+            # convert to float
+            npimg = npimg / 255.0
 
-    return resize
+        return npimg
+
+    return lambda x: batch_apply(crappify_img, x)
 
 
-class CrappifyTransformer(DataTransformer):
-    def __init__(self, crappifier=bilinear(0.5)):
-        super(CrappifyTransformer, self).__init__(labels=False)
-        self.crappifier = crappifier
+def cropper(crop_size):
+    def crop_img(npimg):
+        h, w, _ = npimg.shape
+        ch, cw = crop_size
+        # If the image is too small, we'll make it bigger
+        # This copies the entire image which might not be necessary
+        # If speed becomes and issue look here.
+        if h < ch or w < cw:
+            newimg_shape = (min(ch, h), min(cw, w))
+            new_npimg = np.zeros(newimg_shape + npimg.shape[2:])
+            new_npimg[[slice(i) for i in npimg.shape]] = npimg
+            npimg = new_npimg
+            h, w, _ = npimg.shape
+
+        cropy = np.random.randint(h - ch + 1)
+        cropx = np.random.randint(w - cw + 1)
+        return npimg[cropy : cropy + ch, cropx : cropx + cw]
+
+    return lambda x: batch_apply(crop_img, x)
+
+
+def channels_first(x):
+    return x.transpose(0, 3, 1, 2).astype(np.float32)
+
+
+def transform(x, crop_size, factor, noise=True):
+    crap = crappfier(factor, noise=noise)
+    crop = cropper(crop_size)
+    # Crop the image and crappify
+    x = crop(x)
+    y = x / 255.0  # get the label and convert to float
+    x = crap(x)
+    # Convert to channels first
+    return channels_first(x), channels_first(y)
+
+
+class PrepareData(DataTransformer):
+    def __init__(self, crop_size, factor, noise):
+        super().__init__(labels=False)
+        self.crop_size = crop_size
+        self.factor = factor
+        self.noise = noise
 
     def transform(self, x):
-        return self.crappifier(x), x
-
-
-class ChannelsFirstTransformer(DataTransformer):
-    def __init__(self):
-        super(ChannelsFirstTransformer, self).__init__(labels=True)
-
-    def transform(self, batch):
-        x, y = batch
-        return x.transpose(0, 3, 1, 2), y.transpose(0, 3, 1, 2)
+        return transform(x, self.crop_size, self.factor, noise=self.noise)
