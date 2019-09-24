@@ -1,7 +1,7 @@
 import torch.nn as nn
-from loss import feature_loss, accuracy_with_logits
+from loss import accuracy_with_logits
 
-from abstract_model import Model
+from .abstract_model import Model
 
 
 class GANModel(Model):
@@ -9,7 +9,7 @@ class GANModel(Model):
         self,
         generator,
         critic,
-        generator_loss=lambda x, y: feature_loss(x, y)["loss"],
+        generator_loss=None,  # TODO: Update this
         critic_loss=nn.BCEWithLogitsLoss(),
         loss_weights=(1.0, 1.0),
         generator_threshold=float("inf"),

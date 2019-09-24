@@ -1,5 +1,6 @@
+from torch.utils.data import random_split
 from torchvision.datasets import VisionDataset
-from torchvision.datasets.folder import default_loader
+from torchvision.datasets.folder import default_loader, is_image_file
 from torchvision.transforms import RandomCrop, Resize, Compose, ToTensor
 from torchvision.transforms.functional import resize
 
@@ -16,6 +17,7 @@ class ImagePathDataset(VisionDataset):
     def __init__(self, paths, transform=identity, loader=default_loader):
         """A dataset of image paths"""
         assert len(paths)
+        assert all(is_image_file(path) for path in paths)
         root = os.path.dirname(paths[0])
         super().__init__(root, transform=transform, target_transform=None)
         self.paths = paths
@@ -27,6 +29,13 @@ class ImagePathDataset(VisionDataset):
 
     def __len__(self):
         return len(self.paths)
+
+    def split(self, split):
+        split_len = round(split * len(self))
+        train_dataset, val_dataset = random_split(
+            self, [len(self) - split_len, split_len]
+        )
+        return train_dataset, val_dataset
 
 
 def Crappify(factor):
@@ -45,7 +54,7 @@ default_crappifer = Crappify(0.5)
 class CrappifyDataset(ImagePathDataset):
     def __init__(
         self,
-        glob_path,
+        folder,
         crappifier=default_crappifer,
         transform=identity,
         crop_size=None,
@@ -67,8 +76,9 @@ class CrappifyDataset(ImagePathDataset):
         if crop_size is not None:
             self.cropper = RandomCrop(crop_size)
             transform = Compose([self.cropper, transform])
-        super().__init__(sorted(glob(glob_path)), transform=transform, loader=loader)
-        self.glob_path = glob_path
+        paths = sorted(os.path.join(folder, path) for path in os.listdir(folder))
+        super().__init__(paths, transform=transform, loader=loader)
+        self.folder = folder
         self.crappifier = crappifier
         self.test = test
         toTensor = ToTensor()
@@ -93,14 +103,15 @@ class CrappifyDataset(ImagePathDataset):
         x = self.tensorify(x)
         if self.test:
             return {"input": x}
-        return {"input": x, "target": self.tensorify(y)}}
+        y = self.tensorify(sample)
+        return {"input": x, "target": y}
 
 
 class CritDataset(ImagePathDataset):
     def __init__(
         self,
-        generated_glob_path,
-        original_glob_path,
+        generated_folder,
+        original_folder,
         transform=identity,
         crop_size=None,
         loader=default_loader,
@@ -109,16 +120,16 @@ class CritDataset(ImagePathDataset):
         if crop_size is not None:
             self.cropper = RandomCrop(crop_size)
             transform = Compose([self.cropper, transform])
-        generated_paths = sorted(glob())
-        original_paths = sorted(glob(original_glob_path))
+        generated_paths = sorted(os.listdir(generated_folder))
+        original_paths = sorted(os.listdir(original_folder))
         super().__init__(
             generated_paths + original_paths, transform=transform, loader=loader
         )
 
-        self.generated_glob_path = generated_glob_path
+        self.generated_folder = generated_folder
         self.generated_paths = generated_paths
         self.num_generated = len(generated_paths)
-        self.original_glob_path = original_glob_path
+        self.original_folder = original_folder
         self.original_paths = original_paths
         self.num_original = len(original_paths)
 

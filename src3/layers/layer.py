@@ -3,11 +3,6 @@ import torch
 import torch.nn as nn
 
 
-def Input(*input_shape):
-    # Use 1 for the batch size
-    return torch.zeros(1, *input_shape)
-
-
 class Layer(nn.Module):
     def __init__(self):
         """An abstract class for a layer. This subclasses `torch`'s `nn.Module`.

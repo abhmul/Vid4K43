@@ -90,6 +90,11 @@ class DynamicUnetWide(Layer):
         # Final Conv layer
         self.final_conv = Conv2d(self.input_channels, kernel_size=1)
 
+    def decoder_parameters(self):
+        params = set(self.parameters())
+        encoder_params = set(self.encoder.parameters())
+        return list(params - encoder_params)
+
     def forward(self, x):
         inputs = x
         # Input batchnorm if its activated

@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loss import accuracy_with_logits
 
-from abstract_model import Model
+from .abstract_model import Model
 from layers import Critic
 
 

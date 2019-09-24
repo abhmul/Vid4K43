@@ -1,0 +1,1 @@
+{"experiment": "test", "load": false, "data": "test_imgs/original", "crop_size": 256, "downsample": 0.5, "val_split": 0.05, "batch_size": 2, "encoder": "resnet18", "channels_factor": 2, "batchnorm": false, "no_spectral_norm": false, "input_batchnorm": false, "lr": 0.01, "momentum": 0.9, "epochs": 1}

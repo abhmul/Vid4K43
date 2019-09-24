@@ -5,8 +5,9 @@ import torch.nn.functional as F
 from . import Layer, Conv2d, BatchNorm2d, PixelShuffle_ICNR, SelfAttention
 from . import utils
 
-concat = lambda inputs: torch.cat(inputs, dim=1)
-add = lambda inputs: sum(inputs)
+
+def concat(inputs):
+    return torch.cat(inputs, dim=1)
 
 
 class ResidualBlock(Layer):
@@ -43,7 +44,7 @@ class ResidualBlock(Layer):
             batchnorm=self.batchnorm,
             spectral_norm=self.spectral_norm,
         )
-        self.merge = concat if dense else add
+        self.merge = concat if dense else sum
 
         self.register_builder(self.__build_layer)
 
@@ -87,7 +88,9 @@ class UnetBlockWide(Layer):
             activation=nn.ReLU(),
             spectral_norm=self.spectral_norm,
         )
-        self.att = SelfAttention() if self.self_attention else lambda x: x
+        # self.att = SelfAttention() if self.self_attention else lambda x: x
+        if self.self_attention:
+            self.att = SelfAttention()
         self.merge = concat
 
     def forward(self, upsample_input, residual_input):
@@ -99,4 +102,8 @@ class UnetBlockWide(Layer):
                 upsample_output, x_img_shape, mode="nearest"
             )
         cat_x = self.merge([upsample_output, self.bn(residual_input)])
-        return self.att(self.conv(cat_x))
+        x = self.conv(cat_x)
+        if self.self_attention:
+            x = self.att(x)
+        return x
+

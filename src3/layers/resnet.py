@@ -144,3 +144,16 @@ def wide_resnet101_2(pretrained=False, progress=True, **kwargs):
     return _resnet(
         "wide_resnet101_2", Bottleneck, [3, 4, 23, 3], pretrained, progress, **kwargs
     )
+
+
+RESNET_DICT = {
+    "resnet18": resnet18,
+    "resnet34": resnet34,
+    "resnet50": resnet50,
+    "resnet101": resnet101,
+    "resnet152": resnet152,
+}
+
+
+def get_resnet(name, pretrained=False, progress=True, **kwargs):
+    return RESNET_DICT[name](pretrained=pretrained, progress=progress, **kwargs)

@@ -4,8 +4,6 @@ import torch.nn.functional as F
 import torchvision.models as models
 from torchvision.models.vgg import cfgs as VGG_CONFIGS
 
-from pyjet.hooks import hook_outputs
-
 
 def requires_grad(module, grad):
     parameters = list(module.parameters())
@@ -37,12 +35,25 @@ class FeatureLoss(nn.Module):
 
         # Hook the features to use for the loss
         self.loss_features = [self.features[i] for i in layer_ids]
-        self.hooks = hook_outputs(self.loss_features, detach=False)
+        self.feature_outputs = [None] * len(self.loss_features)
+        self.feature_hooks = [
+            feature.register_forward_hook(self.capture_output(i))
+            for i, feature in enumerate(self.loss_features)
+        ]
+
         self.base_loss = F.l1_loss
+
+    def capture_output(self, feature_i):
+        def hook_output(module, inputs, output):
+            self.feature_outputs[feature_i] = output
+
+        return hook_output
 
     def _make_features(self, x):
         self.features(x)
-        return [o[0] for o in self.hooks.stored]
+        feat = self.feature_outputs
+        self.feature_outputs = [None] * len(self.loss_features)
+        return feat
 
     def forward(self, x, y):
         out_feat = self._make_features(y)
@@ -61,14 +72,6 @@ class FeatureLoss(nn.Module):
             "feat2": feat2,
             "feat3": feat3,
         }
-
-
-# Hack to not save weights in model state dict
-__feature_loss = FeatureLoss()
-
-
-def feature_loss(x, y):
-    return __feature_loss(x, y)
 
 
 def accuracy_with_logits(logits, y):
