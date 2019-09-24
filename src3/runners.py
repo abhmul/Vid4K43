@@ -9,14 +9,6 @@ import torch
 import torch.nn as nn
 
 
-def islice(gen, start=None, stop=None, step=1):
-    if start is None:
-        return gen
-    if stop is None:
-        return itools.islice(gen, start)
-    return itools.islice(gen, start, stop, step)
-
-
 def get_current_device():
     if torch.cuda.device_count() > 0:
         return torch.cuda.current_device()
@@ -39,6 +31,11 @@ class ModelRunner(object):
         self.steps = steps
         self.progress = progress
 
+        self.steps_run = 0
+
+        # Used by any runner that needs to save outputs
+        self.outputs = None
+
     def setup_model(self, model):
         return model.to(self.device)
 
@@ -59,7 +56,7 @@ class Predictor(ModelRunner):
         for i, batch in enumerate(dataloader):
             # Assumes batch is a dict of string -> tensors
             batch = batch_to_device(batch, self.device)
-            yield model.predict_step(batch)
+            yield i, model.predict_step(batch)
 
 
 class Evaluator(ModelRunner):
@@ -68,7 +65,7 @@ class Evaluator(ModelRunner):
         model = self.setup_model(model).eval()
         dataloader = self.setup_dataloader(dataloader)
 
-        outputs = defaultdict(list)
+        self.outputs = defaultdict(list)
         for i, batch in enumerate(dataloader):
             batch = batch_to_device(batch, self.device)
             output = model.val_step(batch)
@@ -76,12 +73,15 @@ class Evaluator(ModelRunner):
             if output is NotImplemented:
                 return
             dataloader.set_postfix(output)
+            
             # Add the output to the outputs tracker
             for key, val in output.items():
-                outputs[key].append(val)
-        outputs = model.val_end(outputs)
-        dataloader.set_postfix(outputs)
-        return outputs
+                self.outputs[key].append(val)
+            
+            yield i, output
+        
+        self.outputs = model.val_end(self.outputs)
+        dataloader.set_postfix(self.outputs)
 
 
 class EpochTrainer(ModelRunner):
@@ -89,7 +89,7 @@ class EpochTrainer(ModelRunner):
         model = self.setup_model(model).train()
         dataloader = self.setup_dataloader(dataloader)
 
-        outputs = defaultdict(list)
+        self.outputs = defaultdict(list)
         for i, batch in enumerate(dataloader):
             batch = batch_to_device(batch, self.device)
             output = model.train_step(batch)
@@ -101,14 +101,17 @@ class EpochTrainer(ModelRunner):
             loss.backward()
             [optim.step() for optim in model.optimizers]
             [scheduler.step() for scheduler in model.schedulers]
-
+            
             # Add the output to the outputs tracker
             for key, val in output.items():
-                outputs[key].append(val)
-        outputs = model.train_end(outputs)
-        dataloader.set_postfix(outputs)
+                self.outputs[key].append(val)
+            
+            yield i, output
+
+        
+        self.outputs = model.train_end(self.outputs)
+        dataloader.set_postfix(self.outputs)
         model.eval()
-        return outputs
 
 
 class Checkpointer(object):
@@ -141,7 +144,7 @@ class Trainer(object):
         steps_per_epoch=None,
         val_steps=None,
         device=get_current_device(),
-        progress=True,
+        progress=True
     ):
         self.epochs = epochs
         self.steps_per_epoch = steps_per_epoch
@@ -152,7 +155,12 @@ class Trainer(object):
         self.epoch_trainer = EpochTrainer(
             steps=steps_per_epoch, device=device, progress=progress
         )
+        # This will immediately return a stopIteration if there is no model.val_step(...) defined
         self.evaluator = Evaluator(steps=val_steps, device=device, progress=progress)
+
+        # General trackers
+        self.global_step = 0
+        self.val_global_step = 0
 
         # Callbacks we want to use
         self.checkpointer = none_func
@@ -163,22 +171,27 @@ class Trainer(object):
         )
 
     def __call__(
-        self, model, train_dataloader, val_dataloader=None
+        self, model, train_dataloader, val_dataloader=None, writer=None
     ):
         outputs = []
         for epoch in range(self.epochs):
             print(f"Epoch {epoch+1}/{self.epochs}")
-            train_outputs = self.epoch_trainer(model, train_dataloader)
-            val_outputs = self.evaluator(model, val_dataloader)
+            
+            for i, output in self.epoch_trainer(model, train_dataloader):
+                self.global_step += 1,
+                if writer is not None: writer.add_scalars("train", output, self.global_step)
+            train_outputs = self.epoch_trainer.outputs
+
+            for i, output in self.evaluator(model, val_dataloader)
+                self.val_global_step += 1
+                if writer is not None: writer.add_scalars("validation", output, self.global_step)
+            val_outputs = self.evaluator.outputs  # Even if it doesn't run, it still defines an outputs
+            assert val_outputs is not None, "Evaluator should define an outputs upon being called, currently None."
 
             output = {**train_outputs, **val_outputs}
             self.checkpointer(model, output, epoch=epoch + 1)
             outputs.append(output)
         return outputs
-
-
-class GANEpochTrainer(ModelRunner):
-    def __call__(self, model, dataloader, optimizers, schedulers=()):
 
 
 
